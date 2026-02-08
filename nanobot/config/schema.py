@@ -77,6 +77,12 @@ class ProviderConfig(BaseModel):
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
 
 
+class GeminiCliConfig(BaseModel):
+    """Google Gemini CLI (Cloud AI Companion) configuration."""
+    refresh_token: str = ""
+    project_id: str | None = None
+
+
 class ProvidersConfig(BaseModel):
     """Configuration for LLM providers."""
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -88,6 +94,7 @@ class ProvidersConfig(BaseModel):
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # 阿里云通义千问
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
+    google_gemini_cli: GeminiCliConfig = Field(default_factory=GeminiCliConfig)
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
 

@@ -263,6 +263,24 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
+    # Google Gemini CLI (Cloud AI Companion): uses oauth refresh token
+    ProviderSpec(
+        name="google_gemini_cli",
+        keywords=("gemini-cli",),
+        env_key="GOOGLE_CLOUD_ACCESS_TOKEN",
+        display_name="Gemini CLI",
+        litellm_prefix="vertex_ai",        # Or custom handling in provider
+        skip_prefixes=("gemini/", "vertex_ai/"),
+        env_extras=(),
+        is_gateway=False,
+        is_local=False,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="",
+        default_api_base="",
+        strip_model_prefix=False,
+        model_overrides=(),
+    ),
+
     # === Auxiliary (not a primary LLM provider) ============================
 
     # Groq: mainly used for Whisper voice transcription, also usable for LLM.

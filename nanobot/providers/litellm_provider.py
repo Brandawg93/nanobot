@@ -9,6 +9,7 @@ from litellm import acompletion
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
+from nanobot.providers.gemini_cli_auth import refresh_access_token
 
 
 class LiteLLMProvider(LLMProvider):
@@ -48,6 +49,28 @@ class LiteLLMProvider(LLMProvider):
         
         # Disable LiteLLM logging noise
         litellm.suppress_debug_info = True
+
+    def _setup_gemini_cli_auth(self) -> None:
+        """Refresh and set the access token for Gemini CLI if configured."""
+        from nanobot.config.loader import load_config
+        config = load_config()
+        cli_config = config.providers.google_gemini_cli
+        
+        if cli_config.refresh_token:
+            try:
+                access_token, discovered_project = refresh_access_token(cli_config.refresh_token)
+                os.environ["GOOGLE_CLOUD_ACCESS_TOKEN"] = access_token
+                
+                # Priority: 1. Config project_id, 2. Discovered project_id
+                project_to_use = cli_config.project_id or discovered_project
+                if project_to_use:
+                    os.environ["VERTEX_AI_PROJECT"] = project_to_use
+            except Exception as e:
+                # We'll let LiteLLM fail later if the token is missing/invalid,
+                # but we log the refresh failure here if we could.
+                # For now, we'll just print to stderr as a simple signal.
+                import sys
+                print(f"Warning: Failed to refresh Gemini CLI access token: {e}", file=sys.stderr)
     
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
@@ -119,7 +142,12 @@ class LiteLLMProvider(LLMProvider):
         Returns:
             LLMResponse with content and/or tool calls.
         """
-        model = self._resolve_model(model or self.default_model)
+        # Handle Gemini CLI token refresh if needed
+        model_name = model or self.default_model
+        if "gemini-cli" in model_name.lower():
+            self._setup_gemini_cli_auth()
+
+        model = self._resolve_model(model_name)
         
         kwargs: dict[str, Any] = {
             "model": model,
