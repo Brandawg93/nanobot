@@ -260,10 +260,11 @@ def _make_provider(config):
     # Check if we have valid auth for the selected provider
     has_auth = False
     if p:
-        if hasattr(p, "api_key"):
-            has_auth = bool(p.api_key)
-        elif hasattr(p, "refresh_token"):
-            has_auth = bool(p.refresh_token)
+        # If it's the Gemini CLI provider, check refresh_token first
+        if hasattr(p, "refresh_token") and p.refresh_token:
+            has_auth = True
+        elif hasattr(p, "api_key") and p.api_key:
+            has_auth = True
             
     if not has_auth and not model.startswith("bedrock/"):
         console.print("[red]Error: No API key or Refresh Token configured.[/red]")
