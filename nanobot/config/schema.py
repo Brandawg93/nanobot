@@ -165,7 +165,7 @@ class Config(BaseSettings):
                 cli_config: GeminiCliConfig = p
                 if cli_config.refresh_token:
                     import os
-                    from nanobot.providers.google_gemini_cli import refresh_access_token
+                    from nanobot.providers.gemini_cli_auth import refresh_access_token
                     try:
                         access_token, discovered_project = refresh_access_token(cli_config.refresh_token)
                         os.environ["GOOGLE_CLOUD_ACCESS_TOKEN"] = access_token
