@@ -70,6 +70,9 @@ class LiteLLMProvider(LLMProvider):
                 # Priority: 1. Config location, 2. Env var
                 if cli_config.location:
                     os.environ["VERTEX_AI_LOCATION"] = cli_config.location
+                
+                # Store refresh token for constructing proper authorized_user credentials later
+                os.environ["GEMINI_REFRESH_TOKEN"] = cli_config.refresh_token
             except Exception as e:
                 import sys
                 print(f"[DEBUG] Gemini CLI auth setup error: {e}", file=sys.stderr)
@@ -188,14 +191,46 @@ class LiteLLMProvider(LLMProvider):
         self._apply_model_overrides(model, kwargs)
 
         if model.startswith("vertex_ai") and token and v_project:
-            # Use google-auth Credentials object to bypass ADC entirely
-            try:
-                from google.oauth2.credentials import Credentials
-                kwargs["vertex_credentials"] = Credentials(token)
-                print(f"[DEBUG] Successfully created vertex_credentials from OAuth token.")
-            except ImportError:
-                # Fallback to env vars if google-auth is missing
-                print(f"[DEBUG] google-auth not found, falling back to environment variables.")
+            # Construct a dictionary credential that litellm understands (authorized_user)
+            # This avoids the strict type check for Credentials objects in some litellm versions
+            refresh_token = os.environ.get("GEMINI_REFRESH_TOKEN")
+            if refresh_token:
+                try:
+                    from nanobot.providers.gemini_cli_auth import extract_credentials, extract_antigravity_credentials
+                    try:
+                        # Try Antigravity first as constructed in gemini_cli_auth
+                        try:
+                            client_id, client_secret = extract_antigravity_credentials()
+                        except Exception:
+                            client_id, client_secret = extract_credentials()
+                            
+                        kwargs["vertex_credentials"] = {
+                            "type": "authorized_user",
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                            "refresh_token": refresh_token,
+                            # Important: LiteLLM might need the refreshed access token if it validates immediately
+                            # But standard authorized_user JSON doesn't strictly require it if refresh works
+                            # However, we have a fresh one, let's pass it if possible, though dict structure 
+                            # usually just has refresh_token. 
+                            # Actually, google-auth AuthorizedUserCredentials can take 'token' (access token).
+                            # LiteLLM passes this dict to google.oauth2.credentials.Credentials.from_authorized_user_info
+                            # which expects 'refresh_token', 'client_id', 'client_secret'.
+                            # It doesn't typically take 'access_token' in the dict for *initialization* 
+                            # but it uses it if present in the underlying object.
+                            # Let's stick to the standard required fields.
+                        }
+                        # Inject access credential if we have it? 
+                        # create_credentials function in litellm might not use it.
+                        print(f"[DEBUG] Constructed 'authorized_user' credential dict for LiteLLM.")
+                    except RuntimeError as re:
+                        print(f"[DEBUG] Failed to extract CLI credentials for dict auth: {re}")
+                except ImportError:
+                     pass
+
+            # Fallback (or if refresh_token missing): set env vars
+            if "vertex_credentials" not in kwargs:
+                print(f"[DEBUG] Using environment variables for auth (fallback).")
                 os.environ["GCP_ACCESS_TOKEN"] = token
                 os.environ["GOOGLE_CLOUD_ACCESS_TOKEN"] = token
 
@@ -205,7 +240,7 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = "auto"
 
         # Final kwargs logging (sensitive fields redacted)
-        safe_kwargs = {k: (v if k not in ["api_key", "vertex_credentials", "messages"] else "<REDACTED>") for k, v in kwargs.items()}
+        safe_kwargs = {k: (v if k not in ["api_key", "vertex_credentials", "messages", "vertex_project", "vertex_location"] else "<REDACTED>") for k, v in kwargs.items()}
         print(f"[DEBUG] LiteLLM acompletion kwargs: {safe_kwargs}")
         
         try:

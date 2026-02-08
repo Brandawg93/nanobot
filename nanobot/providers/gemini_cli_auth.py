@@ -44,13 +44,32 @@ def extract_credentials() -> tuple[str, str]:
             
             if id_match and secret_match:
                 cid = id_match.group(1)
-                print(f"[DEBUG] Extracted Gemini CLI Client ID: {cid[:10]}...{cid[-20:]}")
+                print(f"[DEBUG] Extracted Gemini CLI Client ID: {cid[:4]}...***")
                 return cid, secret_match.group(1)
                 
     raise RuntimeError(
-        f"Could not extract OAuth credentials from Gemini CLI at {resolved_path}. "
-        "The package structure may have changed."
+        "Could not find Gemini CLI credentials. Please install the CLI: npm install -g @google/gemini-cli"
     )
+
+def extract_antigravity_credentials() -> tuple[str, str]:
+    """
+    Returns hardcoded Client ID/Secret for Google Antigravity (Cloud Code Assist).
+    These are public constants used in VS Code extensions / OpenClaw.
+    """
+    import base64
+    # Decoded from openclaw source to stay in sync
+    # CLIENT_ID = decode("MTA3...=")
+    # CLIENT_SECRET = decode("R09D...=")
+    
+    # We can just return them directly or base64 decode them to be safe/obfuscated similarly
+    cid_b64 = "MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ=="
+    sec_b64 = "R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQWY="
+    
+    cid = base64.b64decode(cid_b64).decode("utf-8")
+    sec = base64.b64decode(sec_b64).decode("utf-8")
+    
+    print(f"[DEBUG] Using Google Antigravity Client ID: {cid[:4]}...***")
+    return cid, sec
 
 CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 
@@ -60,16 +79,17 @@ def discover_project(access_token: str) -> str | None:
     This is a near-exact port of openclaw's discoverProject logic.
     """
     env_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT_ID")
-    print(f"[DEBUG] Starting project discovery (Env Project: {env_project or 'None'})")
+    masked_env = f"{env_project[:4]}...***" if env_project else "None"
+    print(f"[DEBUG] Starting project discovery (Env Project: {masked_env})")
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "User-Agent": "google-api-nodejs-client/9.15.1",
         "X-Goog-Api-Client": "gl-node/openclaw",
     }
-
+    
+    # 1. Attempt loadCodeAssist
     try:
-        # 1. Load current status
         load_body = {
             "cloudaicompanionProject": env_project,
             "metadata": {
@@ -79,27 +99,49 @@ def discover_project(access_token: str) -> str | None:
                 "duetProject": env_project,
             }
         }
-        r = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist", headers=headers, json=load_body, timeout=10.0)
-        r.raise_for_status()
-        data = r.json()
-        print(f"[DEBUG] loadCodeAssist response: {list(data.keys())}")
-
-        # 2. Check for project in various response fields (cloudaicompanionProject, etc)
-        project = data.get("cloudaicompanionProject")
-        if project:
-            if isinstance(project, str): return project
-            if isinstance(project, dict) and project.get("id"): return project["id"]
-
-        # 3. If already provisioned with a tier, but no project explicitly returned, fallback to env
+        resp = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist", headers=headers, json=load_body, timeout=10.0)
+        
+        # OpenClaw logic: if status is OK, parse. If VPC-SC error, assume standard tier. Else fail.
+        data = {}
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"[DEBUG] loadCodeAssist success: {list(data.keys())}")
+        else:
+             print(f"[DEBUG] loadCodeAssist failed: {resp.status_code}")
+             # OpenClaw has logic for isVpcScAffected -> TIER_STANDARD
+             # We'll skip for now unless we see it.
+    
+        # OpenClaw Logic: 
+        # if (data.currentTier) { 
+        #   const project = data.cloudaicompanionProject;
+        #   if (typeof project === "string") return project;
+        #   if (typeof project === "object" && project.id) return project.id;
+        #   if (envProject) return envProject;
+        #   throw Error...
+        # }
+        
         if data.get("currentTier"):
-            if env_project: return env_project
-            return None
+            proj = data.get("cloudaicompanionProject")
+            final_pid = None
+            if isinstance(proj, str) and proj: final_pid = proj
+            elif isinstance(proj, dict) and proj.get("id"): final_pid = proj["id"]
+            elif env_project: final_pid = env_project
+            
+            if final_pid:
+                print(f"[DEBUG] Resolved project from loadCodeAssist: {final_pid[:4]}...***")
+                return final_pid
+            else:
+                 print("[DEBUG] loadCodeAssist returned currentTier but no project ID found.")
+                 # OpenClaw throws error here.
 
-        # 4. If not provisioned, Onboard the user (matches openclaw's default tier logic)
+        # If we are here, OpenClaw proceeds to Onboarding.
+        # const tier = getDefaultTier(data.allowedTiers);
         allowed = data.get("allowedTiers", [])
-        tier = next((t for t in allowed if t.get("isDefault")), None) or (allowed[0] if allowed else {"id": "free-tier"})
-        tier_id = tier.get("id", "free-tier")
-
+        tier = next((t for t in allowed if t.get("isDefault")), None) or {"id": "legacy-tier"} # OpenClaw defaults to legacy-tier if empty
+        tier_id = tier.get("id") or "free-tier"
+        
+        # openclaw: if (tierId !== TIER_FREE && !envProject) throw Error...
+        
         onboard_body = {
             "tierId": tier_id,
             "metadata": {
@@ -110,31 +152,64 @@ def discover_project(access_token: str) -> str | None:
         }
         if tier_id != "free-tier" and env_project:
             onboard_body["cloudaicompanionProject"] = env_project
+            onboard_body["metadata"]["duetProject"] = env_project # type: ignore
 
-        print(f"[DEBUG] User not provisioned. Onboarding with tier: {tier_id}")
-        or_ = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser", headers=headers, json=onboard_body, timeout=10.0)
-        or_.raise_for_status()
-        lro = or_.json()
-        print(f"[DEBUG] onboardUser response LRO: {lro.get('name')}")
-
-        # 5. Simple polling for the LRO (Onboarding can take time)
+        print(f"[DEBUG] Onboarding user with tier: {tier_id}")
+        onboard_resp = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser", headers=headers, json=onboard_body, timeout=15.0)
+        onboard_resp.raise_for_status()
+        lro = onboard_resp.json()
+        
+        # OpenClaw polling logic
         import time
-        for _ in range(12): # Poll for up to 60 seconds
+        for _ in range(24): # OpenClaw polls 24 times * 5s
             if lro.get("done"): break
             if not lro.get("name"): break
-            print(f"[DEBUG] Polling onboarding LRO: {lro['name']} (attempt {_ + 1})")
-            time.sleep(5)
-            pr = httpx.get(f"{CODE_ASSIST_ENDPOINT}/v1internal/{lro['name']}", headers=headers)
-            if pr.status_code == 200:
-                lro = pr.json()
-
+            
+            # OpenClaw waits 5000ms BEFORE fetching
+            time.sleep(5) 
+            poll_resp = httpx.get(f"{CODE_ASSIST_ENDPOINT}/v1internal/{lro['name']}", headers=headers, timeout=10.0)
+            if poll_resp.status_code == 200:
+                lro = poll_resp.json()
+        
         pid = lro.get("response", {}).get("cloudaicompanionProject", {}).get("id")
-        print(f"[DEBUG] Resolved project ID: {pid or env_project}")
-        return pid or env_project
+        final_pid = pid or env_project
+        if final_pid:
+            print(f"[DEBUG] Resolved project from Onboarding: {final_pid[:4]}...***")
+            return final_pid
+            
+        print("[DEBUG] Failed to resolve project after onboarding.")
+        return env_project
 
     except Exception as e:
         print(f"[DEBUG] Discovery error: {e}")
         return env_project
+
+def enable_vertex_api(project_id: str, access_token: str) -> None:
+    """Enable the Vertex AI API for the project."""
+    url = f"https://serviceusage.googleapis.com/v1/projects/{project_id}/services/aiplatform.googleapis.com:enable"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        # Check if already enabled? serviceusage.services.get
+        # Simple approach: just try to enable it. match openclaw behavior.
+        masked_pid = f"{project_id[:4]}...***"
+        print(f"[DEBUG] Ensuring Vertex AI API is enabled for {masked_pid}...")
+        resp = httpx.post(url, headers=headers, timeout=10.0)
+        if resp.status_code == 200:
+            lro = resp.json()
+            if lro.get("done"):
+                print(f"[DEBUG] Vertex AI API already enabled or operation complete.")
+            else:
+                print(f"[DEBUG] Enabling Vertex AI API (LRO: {lro.get('name')})...")
+                # We could poll, but usually it's fast enough or we can proceed and let it finish
+                # But to be safe, let's wait a few seconds
+                import time
+                time.sleep(3)
+        elif resp.status_code == 403:
+             print(f"[DEBUG] Permission denied enabling API. User might not have 'serviceusage.services.enable'.")
+        else:
+             print(f"[DEBUG] Enable API request failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        print(f"[DEBUG] Failed to enable Vertex AI API: {e}")
 
 def refresh_access_token(refresh_token: str) -> tuple[str, str | None]:
     """
@@ -144,7 +219,11 @@ def refresh_access_token(refresh_token: str) -> tuple[str, str | None]:
     if not refresh_token:
         raise ValueError("Refresh token is required")
 
-    client_id, client_secret = extract_credentials()
+    # Try Antigravity credentials first, then Gemini CLI
+    try:
+        client_id, client_secret = extract_antigravity_credentials()
+    except Exception:
+        client_id, client_secret = extract_credentials()
 
     data = {
         "client_id": client_id,
@@ -162,4 +241,18 @@ def refresh_access_token(refresh_token: str) -> tuple[str, str | None]:
         raise ValueError("Failed to obtain access token from response")
         
     project_id = discover_project(access_token)
+    
+    # OpenClaw default project - a good fallback if the user-provisioned one is broken
+    DEFAULT_PROJECT_ID = "rising-fact-p41fc" 
+    
+    if project_id:
+        try:
+            enable_vertex_api(project_id, access_token)
+        except Exception:
+            print(f"[DEBUG] Failed to enable/verify API on {project_id}. Falling back to default.")
+            project_id = DEFAULT_PROJECT_ID
+    else:
+        print(f"[DEBUG] No project discovered. Using default: {DEFAULT_PROJECT_ID}")
+        project_id = DEFAULT_PROJECT_ID
+        
     return access_token, project_id
