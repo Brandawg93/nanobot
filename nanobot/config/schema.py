@@ -141,21 +141,38 @@ class Config(BaseSettings):
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
     
-    def get_provider(self, model: str | None = None) -> ProviderConfig | None:
-        """Get matched provider config (api_key, api_base, extra_headers). Falls back to first available."""
+    def get_provider(self, model: str | None = None) -> ProviderConfig | GeminiCliConfig | None:
+        """Get matched provider config. Falls back to first available."""
         from nanobot.providers.registry import PROVIDERS
-        model_lower = (model or self.agents.defaults.model).lower()
+        model_name = (model or self.agents.defaults.model)
+        model_lower = model_name.lower()
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
-            if p and any(kw in model_lower for kw in spec.keywords) and p.api_key:
+            if not p:
+                continue
+            
+            # Check if this provider "has auth"
+            is_valid = False
+            if spec.name == "google_gemini_cli":
+                is_valid = bool(getattr(p, "refresh_token", ""))
+            else:
+                is_valid = bool(getattr(p, "api_key", ""))
+
+            if is_valid and any(kw in model_lower for kw in spec.keywords):
                 return p
 
-        # Fallback: gateways first, then others (follows registry order)
+        # Fallback: find first one with auth (follows registry order)
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
+            if not p:
+                continue
+            
+            if spec.name == "google_gemini_cli":
+                if getattr(p, "refresh_token", ""):
+                    return p
+            elif getattr(p, "api_key", ""):
                 return p
         return None
 
