@@ -157,6 +157,8 @@ def onboard():
     
     # Create default config
     config = Config()
+    # Initialize empty Gemini CLI config
+    config.providers.google_gemini_cli.refresh_token = ""
     save_config(config)
     console.print(f"[green]✓[/green] Created config at {config_path}")
     
@@ -754,6 +756,9 @@ def status():
                     console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
                 else:
                     console.print(f"{spec.label}: [dim]not set[/dim]")
+            elif spec.name == "google_gemini_cli":
+                has_token = bool(p.refresh_token)
+                console.print(f"{spec.label}: {'[green]✓[/green]' if has_token else '[dim]not set[/dim]'}")
             else:
                 has_key = bool(p.api_key)
                 console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
