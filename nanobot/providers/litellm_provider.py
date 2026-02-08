@@ -146,7 +146,6 @@ class LiteLLMProvider(LLMProvider):
 
         model = self._resolve_model(model_name)
         print(f"[DEBUG] Resolved model for LiteLLM: {model}")
-        print(f"[DEBUG] Final Env - GOOGLE_CLOUD_ACCESS_TOKEN: {'set' if os.environ.get('GOOGLE_CLOUD_ACCESS_TOKEN') else 'NOT SET'}")
         print(f"[DEBUG] Final Env - VERTEX_AI_PROJECT: {os.environ.get('VERTEX_AI_PROJECT')}")
         
         kwargs: dict[str, Any] = {
@@ -154,16 +153,14 @@ class LiteLLMProvider(LLMProvider):
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "api_key": self.api_key,
+            "api_base": self.api_base,
+            "extra_headers": self.extra_headers,
         }
         
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
         
-        # Pass api_base directly for custom endpoints (vLLM, etc.)
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
-        
-        # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         

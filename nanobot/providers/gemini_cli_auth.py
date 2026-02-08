@@ -55,48 +55,71 @@ CODE_ASSIST_ENDPOINT = "https://cloudaicompanion.googleapis.com"
 def discover_project(access_token: str) -> str | None:
     """
     Discover the Google Cloud project ID associated with the account.
+    This is a near-exact port of openclaw's discoverProject logic.
     """
-    # 0. Check environment variables first
     env_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT_ID")
-    
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "X-Goog-Api-Client": "gl-python/nanobot",
+        "X-Goog-Api-Client": "gl-python/nanobot", # Identifying as nanobot
     }
-    
-    # 1. Try loadCodeAssist (The openclaw approach)
-    load_body = {
-        "metadata": {
-            "ideType": "IDE_UNSPECIFIED",
-            "platform": "PLATFORM_UNSPECIFIED",
-            "pluginType": "GEMINI",
-        }
-    }
-    
+
     try:
-        response = httpx.post(
-            f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist",
-            headers=headers,
-            json=load_body,
-            timeout=10.0
-        )
-        if response.status_code == 200:
-            data = response.json()
-            project = data.get("cloudaicompanionProject")
-            if isinstance(project, str) and project:
-                return project
-            if isinstance(project, dict) and project.get("id"):
-                return project["id"]
-                
+        # 1. Load current status
+        load_body = {
+            "metadata": {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            }
+        }
+        r = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist", headers=headers, json=load_body, timeout=10.0)
+        r.raise_for_status()
+        data = r.json()
+
+        # 2. If already provisioned, return the project
+        if data.get("currentTier"):
+            proj = data.get("cloudaicompanionProject")
+            if isinstance(proj, str) and proj: return proj
+            if isinstance(proj, dict) and proj.get("id"): return proj["id"]
+            if env_project: return env_project
+            return None
+
+        # 3. If not provisioned, Onboard the user (matches openclaw's default tier logic)
+        allowed = data.get("allowedTiers", [])
+        tier = next((t for t in allowed if t.get("isDefault")), None) or (allowed[0] if allowed else {"id": "FREE"})
+        tier_id = tier.get("id", "FREE")
+
+        onboard_body = {
+            "tierId": tier_id,
+            "metadata": {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            }
+        }
+        if tier_id != "FREE" and env_project:
+            onboard_body["cloudaicompanionProject"] = env_project
+
+        or_ = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser", headers=headers, json=onboard_body, timeout=10.0)
+        or_.raise_for_status()
+        lro = or_.json()
+
+        # 4. Simple polling for the LRO
+        import time
+        for _ in range(5):
+            if lro.get("done"): break
+            if not lro.get("name"): break
+            time.sleep(2)
+            pr = httpx.get(f"{CODE_ASSIST_ENDPOINT}/v1/{lro['name']}", headers=headers)
+            lro = pr.json()
+
+        pid = lro.get("response", {}).get("cloudaicompanionProject", {}).get("id")
+        return pid or env_project
+
     except Exception as e:
-        print(f"[DEBUG] loadCodeAssist failed: {e}")
-        
-    # 2. Fallback to env var if we have it
-    if env_project:
+        print(f"[DEBUG] Discovery error: {e}")
         return env_project
-        
-    return None
 
 def refresh_access_token(refresh_token: str) -> tuple[str, str | None]:
     """
