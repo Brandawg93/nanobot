@@ -135,23 +135,19 @@ class LiteLLMProvider(LLMProvider):
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
-        
-        Args:
-            messages: List of message dicts with 'role' and 'content'.
-            tools: Optional list of tool definitions in OpenAI format.
-            model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
-            max_tokens: Maximum tokens in response.
-            temperature: Sampling temperature.
-        
-        Returns:
-            LLMResponse with content and/or tool calls.
         """
         # Handle Gemini CLI token refresh if needed
         model_name = model or self.default_model
+        print(f"[DEBUG] Chat request for model: {model_name}")
+        
         if "gemini-cli" in model_name.lower():
+            print("[DEBUG] Detected gemini-cli model, triggering auth setup...")
             self._setup_gemini_cli_auth()
 
         model = self._resolve_model(model_name)
+        print(f"[DEBUG] Resolved model for LiteLLM: {model}")
+        print(f"[DEBUG] Final Env - GOOGLE_CLOUD_ACCESS_TOKEN: {'set' if os.environ.get('GOOGLE_CLOUD_ACCESS_TOKEN') else 'NOT SET'}")
+        print(f"[DEBUG] Final Env - VERTEX_AI_PROJECT: {os.environ.get('VERTEX_AI_PROJECT')}")
         
         kwargs: dict[str, Any] = {
             "model": model,
