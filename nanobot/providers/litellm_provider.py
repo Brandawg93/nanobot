@@ -140,21 +140,31 @@ class LiteLLMProvider(LLMProvider):
         model_name = model or self.default_model
         print(f"[DEBUG] Chat request for model: {model_name}")
         
-        if "gemini-cli" in model_name.lower():
-            print("[DEBUG] Detected gemini-cli model, triggering auth setup...")
-            self._setup_gemini_cli_auth()
-
         model = self._resolve_model(model_name)
+        
+        # LiteLLM Vertex AI logic: 
+        # To use a raw access token without ADC, we must pass it as THE api_key
+        # and explicitly set vertex_project.
+        token = os.environ.get("GOOGLE_CLOUD_ACCESS_TOKEN")
+        v_project = os.environ.get("VERTEX_AI_PROJECT")
+        
+        current_api_key = self.api_key
+        if model.startswith("vertex_ai") and token:
+            current_api_key = token
+            print(f"[DEBUG] Using OAuth token for Vertex AI call to {model}")
+
         print(f"[DEBUG] Resolved model for LiteLLM: {model}")
-        print(f"[DEBUG] Final Env - VERTEX_AI_PROJECT: {os.environ.get('VERTEX_AI_PROJECT')}")
+        print(f"[DEBUG] Target Project: {v_project}")
         
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "api_key": self.api_key,
+            "api_key": current_api_key,
             "api_base": self.api_base,
+            "vertex_project": v_project,
+            "vertex_location": os.environ.get("VERTEX_AI_LOCATION", "us-central1"),
             "extra_headers": self.extra_headers,
         }
         
