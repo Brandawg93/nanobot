@@ -81,6 +81,11 @@ class GeminiCliConfig(BaseModel):
     """Google Gemini CLI (Cloud AI Companion) configuration."""
     refresh_token: str = ""
     project_id: str | None = None
+    
+    # Compatibility fields for generic provider logic
+    api_key: str = ""
+    api_base: str | None = None
+    extra_headers: dict[str, str] | None = None
 
 
 class ProvidersConfig(BaseModel):
