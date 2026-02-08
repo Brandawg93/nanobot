@@ -263,21 +263,21 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
-    # Google Gemini CLI (Cloud AI Companion): uses oauth refresh token
+    # Google Gemini CLI (Cloud AI Companion): uses oauth refresh token via Vertex AI
     ProviderSpec(
         name="google_gemini_cli",
-        keywords=("gemini-cli",),
+        keywords=("gemini-cli", "vertex-ai"),
         env_key="GOOGLE_CLOUD_ACCESS_TOKEN",
         display_name="Gemini CLI",
-        litellm_prefix="vertex_ai",        # Or custom handling in provider
-        skip_prefixes=("gemini/", "vertex_ai/"),
+        litellm_prefix="vertex_ai",
+        skip_prefixes=("vertex_ai/", "vertex-ai/"),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
         default_api_base="",
-        strip_model_prefix=False,
+        strip_model_prefix=True,           # Strip 'gemini-cli/' so it becomes 'vertex_ai/gemini-...'
         model_overrides=(),
     ),
 

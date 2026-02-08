@@ -94,20 +94,24 @@ class LiteLLMProvider(LLMProvider):
     
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
+        # Find the specification (gateway or standard)
         if self._gateway:
-            # Gateway mode: apply gateway prefix, skip provider-specific prefixes
-            prefix = self._gateway.litellm_prefix
-            if self._gateway.strip_model_prefix:
-                model = model.split("/")[-1]
-            if prefix and not model.startswith(f"{prefix}/"):
-                model = f"{prefix}/{model}"
+            spec = self._gateway
+        else:
+            spec = find_by_model(model)
+            
+        if not spec:
             return model
-        
-        # Standard mode: auto-prefix for known providers
-        spec = find_by_model(model)
-        if spec and spec.litellm_prefix:
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
-                model = f"{spec.litellm_prefix}/{model}"
+            
+        # 1. Apply strip_model_prefix if requested
+        if spec.strip_model_prefix:
+            model = model.split("/")[-1]
+            
+        # 2. Add prefix if missing
+        prefix = spec.litellm_prefix
+        if prefix and not any(model.startswith(s) for s in spec.skip_prefixes):
+            if not model.startswith(f"{prefix}/"):
+                model = f"{prefix}/{model}"
         
         return model
     
