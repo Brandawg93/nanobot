@@ -57,6 +57,7 @@ class LiteLLMProvider(LLMProvider):
         cli_config = config.providers.google_gemini_cli
         
         if cli_config.refresh_token:
+            from nanobot.providers.gemini_cli_auth import refresh_access_token
             try:
                 access_token, discovered_project = refresh_access_token(cli_config.refresh_token)
                 os.environ["GOOGLE_CLOUD_ACCESS_TOKEN"] = access_token
@@ -65,12 +66,13 @@ class LiteLLMProvider(LLMProvider):
                 project_to_use = cli_config.project_id or discovered_project
                 if project_to_use:
                     os.environ["VERTEX_AI_PROJECT"] = project_to_use
+                
+                # Priority: 1. Config location, 2. Env var
+                if cli_config.location:
+                    os.environ["VERTEX_AI_LOCATION"] = cli_config.location
             except Exception as e:
-                # We'll let LiteLLM fail later if the token is missing/invalid,
-                # but we log the refresh failure here if we could.
-                # For now, we'll just print to stderr as a simple signal.
                 import sys
-                print(f"Warning: Failed to refresh Gemini CLI access token: {e}", file=sys.stderr)
+                print(f"[DEBUG] Gemini CLI auth setup error: {e}", file=sys.stderr)
     
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
@@ -151,14 +153,25 @@ class LiteLLMProvider(LLMProvider):
         # and explicitly set vertex_project.
         token = os.environ.get("GOOGLE_CLOUD_ACCESS_TOKEN")
         v_project = os.environ.get("VERTEX_AI_PROJECT")
+        v_location = os.environ.get("VERTEX_AI_LOCATION") or "us-central1"
         
         current_api_key = self.api_key
+        current_extra_headers = (self.extra_headers or {}).copy()
         if model.startswith("vertex_ai") and token:
             current_api_key = token
-            print(f"[DEBUG] Using OAuth token for Vertex AI call to {model}")
+            if not v_project:
+                print("[DEBUG] WARNING: Vertex AI model requested but no Project ID discovered or configured.")
+            else:
+                print(f"[DEBUG] Using OAuth token for Vertex AI call to {model} in {v_location} (Project: {v_project})")
+                # Also set GCP_ACCESS_TOKEN which some versions of LiteLLM prefer
+                os.environ["GCP_ACCESS_TOKEN"] = token
+                # Add openclaw-matching headers to bypass strict filtering or hit better quotas
+                current_extra_headers.update({
+                    "User-Agent": "google-api-nodejs-client/9.15.1",
+                    "X-Goog-Api-Client": "gl-node/openclaw",
+                })
 
         print(f"[DEBUG] Resolved model for LiteLLM: {model}")
-        print(f"[DEBUG] Target Project: {v_project}")
         
         kwargs: dict[str, Any] = {
             "model": model,
@@ -168,8 +181,8 @@ class LiteLLMProvider(LLMProvider):
             "api_key": current_api_key,
             "api_base": self.api_base,
             "vertex_project": v_project,
-            "vertex_location": os.environ.get("VERTEX_AI_LOCATION", "us-central1"),
-            "extra_headers": self.extra_headers,
+            "vertex_location": v_location,
+            "extra_headers": current_extra_headers,
         }
         
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)

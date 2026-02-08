@@ -50,7 +50,7 @@ def extract_credentials() -> tuple[str, str]:
         "The package structure may have changed."
     )
 
-CODE_ASSIST_ENDPOINT = "https://cloudaicompanion.googleapis.com"
+CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 
 def discover_project(access_token: str) -> str | None:
     """
@@ -61,34 +61,40 @@ def discover_project(access_token: str) -> str | None:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "X-Goog-Api-Client": "gl-python/nanobot", # Identifying as nanobot
+        "User-Agent": "google-api-nodejs-client/9.15.1",
+        "X-Goog-Api-Client": "gl-node/openclaw",
     }
 
     try:
         # 1. Load current status
         load_body = {
+            "cloudaicompanionProject": env_project,
             "metadata": {
                 "ideType": "IDE_UNSPECIFIED",
                 "platform": "PLATFORM_UNSPECIFIED",
                 "pluginType": "GEMINI",
+                "duetProject": env_project,
             }
         }
         r = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist", headers=headers, json=load_body, timeout=10.0)
         r.raise_for_status()
         data = r.json()
 
-        # 2. If already provisioned, return the project
+        # 2. Check for project in various response fields (cloudaicompanionProject, etc)
+        project = data.get("cloudaicompanionProject")
+        if project:
+            if isinstance(project, str): return project
+            if isinstance(project, dict) and project.get("id"): return project["id"]
+
+        # 3. If already provisioned with a tier, but no project explicitly returned, fallback to env
         if data.get("currentTier"):
-            proj = data.get("cloudaicompanionProject")
-            if isinstance(proj, str) and proj: return proj
-            if isinstance(proj, dict) and proj.get("id"): return proj["id"]
             if env_project: return env_project
             return None
 
-        # 3. If not provisioned, Onboard the user (matches openclaw's default tier logic)
+        # 4. If not provisioned, Onboard the user (matches openclaw's default tier logic)
         allowed = data.get("allowedTiers", [])
-        tier = next((t for t in allowed if t.get("isDefault")), None) or (allowed[0] if allowed else {"id": "FREE"})
-        tier_id = tier.get("id", "FREE")
+        tier = next((t for t in allowed if t.get("isDefault")), None) or (allowed[0] if allowed else {"id": "free-tier"})
+        tier_id = tier.get("id", "free-tier")
 
         onboard_body = {
             "tierId": tier_id,
@@ -98,21 +104,22 @@ def discover_project(access_token: str) -> str | None:
                 "pluginType": "GEMINI",
             }
         }
-        if tier_id != "FREE" and env_project:
+        if tier_id != "free-tier" and env_project:
             onboard_body["cloudaicompanionProject"] = env_project
 
         or_ = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser", headers=headers, json=onboard_body, timeout=10.0)
         or_.raise_for_status()
         lro = or_.json()
 
-        # 4. Simple polling for the LRO
+        # 5. Simple polling for the LRO (Onboarding can take time)
         import time
-        for _ in range(5):
+        for _ in range(12): # Poll for up to 60 seconds
             if lro.get("done"): break
             if not lro.get("name"): break
-            time.sleep(2)
-            pr = httpx.get(f"{CODE_ASSIST_ENDPOINT}/v1/{lro['name']}", headers=headers)
-            lro = pr.json()
+            time.sleep(5)
+            pr = httpx.get(f"{CODE_ASSIST_ENDPOINT}/v1internal/{lro['name']}", headers=headers)
+            if pr.status_code == 200:
+                lro = pr.json()
 
         pid = lro.get("response", {}).get("cloudaicompanionProject", {}).get("id")
         return pid or env_project

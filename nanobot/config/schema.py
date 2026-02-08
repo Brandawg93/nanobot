@@ -81,6 +81,7 @@ class GeminiCliConfig(BaseModel):
     """Google Gemini CLI (Cloud AI Companion) configuration."""
     refresh_token: str = ""
     project_id: str | None = None
+    location: str | None = None
     
     # Compatibility fields for generic provider logic
     api_key: str = ""
@@ -161,7 +162,30 @@ class Config(BaseSettings):
             # Check if this provider "has auth"
             is_valid = False
             if spec.name == "google_gemini_cli":
-                is_valid = bool(getattr(p, "refresh_token", ""))
+                cli_config: GeminiCliConfig = p
+                if cli_config.refresh_token:
+                    import os
+                    from nanobot.providers.google_gemini_cli import refresh_access_token
+                    try:
+                        access_token, discovered_project = refresh_access_token(cli_config.refresh_token)
+                        os.environ["GOOGLE_CLOUD_ACCESS_TOKEN"] = access_token
+                        
+                        # Priority: 1. Config project_id, 2. Discovered project_id
+                        project_to_use = cli_config.project_id or discovered_project
+                        if project_to_use:
+                            os.environ["VERTEX_AI_PROJECT"] = project_to_use
+                        
+                        # Priority: 1. Config location, 2. Env var
+                        if cli_config.location:
+                            os.environ["VERTEX_AI_LOCATION"] = cli_config.location
+                        is_valid = True
+                    except Exception as e:
+                        # Log the error but continue; we'll show a warning later in chat() if vars are missing
+                        import sys
+                        print(f"[DEBUG] Gemini CLI auth setup warning: {e}", file=sys.stderr)
+                # If refresh_token is not set, but project_id and location are, assume manual config
+                elif cli_config.project_id and cli_config.location:
+                    is_valid = True
             else:
                 is_valid = bool(getattr(p, "api_key", ""))
 
@@ -175,7 +199,8 @@ class Config(BaseSettings):
                 continue
             
             if spec.name == "google_gemini_cli":
-                if getattr(p, "refresh_token", ""):
+                cli_config: GeminiCliConfig = p
+                if cli_config.refresh_token or (cli_config.project_id and cli_config.location):
                     return p
             elif getattr(p, "api_key", ""):
                 return p
