@@ -140,6 +140,10 @@ class LiteLLMProvider(LLMProvider):
         model_name = model or self.default_model
         print(f"[DEBUG] Chat request for model: {model_name}")
         
+        if "gemini-cli" in model_name.lower():
+            print("[DEBUG] Detected gemini-cli model, triggering auth setup...")
+            self._setup_gemini_cli_auth()
+
         model = self._resolve_model(model_name)
         
         # LiteLLM Vertex AI logic: 
