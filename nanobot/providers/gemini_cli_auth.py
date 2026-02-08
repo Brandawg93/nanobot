@@ -55,15 +55,17 @@ CODE_ASSIST_ENDPOINT = "https://cloudaicompanion.googleapis.com"
 def discover_project(access_token: str) -> str | None:
     """
     Discover the Google Cloud project ID associated with the account.
-    Mimics the logic in openclaw's discoverProject.
     """
+    # 0. Check environment variables first
+    env_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT_ID")
+    
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "X-Goog-Api-Client": "gl-python/nanobot",
     }
     
-    # Try loadCodeAssist first
+    # 1. Try loadCodeAssist (The openclaw approach)
     load_body = {
         "metadata": {
             "ideType": "IDE_UNSPECIFIED",
@@ -86,8 +88,13 @@ def discover_project(access_token: str) -> str | None:
                 return project
             if isinstance(project, dict) and project.get("id"):
                 return project["id"]
-    except Exception:
-        pass
+                
+    except Exception as e:
+        print(f"[DEBUG] loadCodeAssist failed: {e}")
+        
+    # 2. Fallback to env var if we have it
+    if env_project:
+        return env_project
         
     return None
 
