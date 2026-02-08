@@ -163,8 +163,7 @@ class LiteLLMProvider(LLMProvider):
                 print("[DEBUG] WARNING: Vertex AI model requested but no Project ID discovered or configured.")
             else:
                 print(f"[DEBUG] Using OAuth token for Vertex AI call to {model} in {v_location} (Project: {v_project})")
-                # Also set GCP_ACCESS_TOKEN which some versions of LiteLLM prefer
-                os.environ["GCP_ACCESS_TOKEN"] = token
+                
                 # Add openclaw-matching headers to bypass strict filtering or hit better quotas
                 current_extra_headers.update({
                     "User-Agent": "google-api-nodejs-client/9.15.1",
@@ -184,16 +183,30 @@ class LiteLLMProvider(LLMProvider):
             "vertex_location": v_location,
             "extra_headers": current_extra_headers,
         }
-        
+
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
-        
-        if self.extra_headers:
-            kwargs["extra_headers"] = self.extra_headers
-        
+
+        if model.startswith("vertex_ai") and token and v_project:
+            # Use google-auth Credentials object to bypass ADC entirely
+            try:
+                from google.oauth2.credentials import Credentials
+                kwargs["vertex_credentials"] = Credentials(token)
+                print(f"[DEBUG] Successfully created vertex_credentials from OAuth token.")
+            except ImportError:
+                # Fallback to env vars if google-auth is missing
+                print(f"[DEBUG] google-auth not found, falling back to environment variables.")
+                os.environ["GCP_ACCESS_TOKEN"] = token
+                os.environ["GOOGLE_CLOUD_ACCESS_TOKEN"] = token
+
         if tools:
+            print(f"[DEBUG] Passing {len(tools)} tools to LiteLLM.")
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        # Final kwargs logging (sensitive fields redacted)
+        safe_kwargs = {k: (v if k not in ["api_key", "vertex_credentials", "messages"] else "<REDACTED>") for k, v in kwargs.items()}
+        print(f"[DEBUG] LiteLLM acompletion kwargs: {safe_kwargs}")
         
         try:
             response = await acompletion(**kwargs)

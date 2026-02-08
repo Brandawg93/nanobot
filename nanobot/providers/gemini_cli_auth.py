@@ -43,7 +43,9 @@ def extract_credentials() -> tuple[str, str]:
             secret_match = re.search(r"(GOCSPX-[A-Za-z0-9_-]+)", content)
             
             if id_match and secret_match:
-                return id_match.group(1), secret_match.group(1)
+                cid = id_match.group(1)
+                print(f"[DEBUG] Extracted Gemini CLI Client ID: {cid[:10]}...{cid[-20:]}")
+                return cid, secret_match.group(1)
                 
     raise RuntimeError(
         f"Could not extract OAuth credentials from Gemini CLI at {resolved_path}. "
@@ -58,6 +60,7 @@ def discover_project(access_token: str) -> str | None:
     This is a near-exact port of openclaw's discoverProject logic.
     """
     env_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT_ID")
+    print(f"[DEBUG] Starting project discovery (Env Project: {env_project or 'None'})")
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
@@ -79,6 +82,7 @@ def discover_project(access_token: str) -> str | None:
         r = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist", headers=headers, json=load_body, timeout=10.0)
         r.raise_for_status()
         data = r.json()
+        print(f"[DEBUG] loadCodeAssist response: {list(data.keys())}")
 
         # 2. Check for project in various response fields (cloudaicompanionProject, etc)
         project = data.get("cloudaicompanionProject")
@@ -107,21 +111,25 @@ def discover_project(access_token: str) -> str | None:
         if tier_id != "free-tier" and env_project:
             onboard_body["cloudaicompanionProject"] = env_project
 
+        print(f"[DEBUG] User not provisioned. Onboarding with tier: {tier_id}")
         or_ = httpx.post(f"{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser", headers=headers, json=onboard_body, timeout=10.0)
         or_.raise_for_status()
         lro = or_.json()
+        print(f"[DEBUG] onboardUser response LRO: {lro.get('name')}")
 
         # 5. Simple polling for the LRO (Onboarding can take time)
         import time
         for _ in range(12): # Poll for up to 60 seconds
             if lro.get("done"): break
             if not lro.get("name"): break
+            print(f"[DEBUG] Polling onboarding LRO: {lro['name']} (attempt {_ + 1})")
             time.sleep(5)
             pr = httpx.get(f"{CODE_ASSIST_ENDPOINT}/v1internal/{lro['name']}", headers=headers)
             if pr.status_code == 200:
                 lro = pr.json()
 
         pid = lro.get("response", {}).get("cloudaicompanionProject", {}).get("id")
+        print(f"[DEBUG] Resolved project ID: {pid or env_project}")
         return pid or env_project
 
     except Exception as e:
